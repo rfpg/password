@@ -20,6 +20,7 @@ def derive_key(password: str, salt: bytes) -> bytes:
         
         # 8 * 32 = 256
         length=32,
+
         # adds random variable that helps protect against pre-computed tables
         salt=salt,
         
@@ -38,8 +39,10 @@ def encrypt(plaintext: str, password: str) -> bytes:
     """random init vector for aes encryption - this is needed for the mode"""
     init_vector = os.urandom(16)
 
-    # CTR is Counter, i.e., Uses a counter as the IV to generate unique keystream blocks for encryption
+    # CTR is Counter, i.e., Uses a counter as the IV to generate unique keystream blocks for encryption. It avoids padding and is secure enough for my purposes.
     cipher = Cipher(algorithms.AES(key), modes.CTR(init_vector))
+
+    # AES is a standard and it's efficient and secure
     encryptor = cipher.encryptor()
     ciphertext = encryptor.update(plaintext.encode()) + encryptor.finalize()
     
