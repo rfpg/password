@@ -1,92 +1,87 @@
+# os is used for salts; base64 is used for encoding and decoding processes; getpass is handy for grabbing a password from terminal;
+
 import os
 import base64
 import getpass
+
+# i used PBKDF2HMAC because it's simple to implement and generally considered resistant to dictionary attacks
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
 
+# -> is a type hint in python. not necessary but improves readability
 def derive_key(password: str, salt: bytes) -> bytes:
-    """
-    Derives a cryptographic key from a password using PBKDF2 with HMAC-SHA256.
-
-    Args:
-        password (str): The password to derive the key from.
-        salt (bytes): The salt to use in the key derivation function.
-
-    Returns:
-        bytes: The derived key.
-    """
+    """this give us a key based on the provided password which will be stored in our hashfile"""
     kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),  # Use SHA256 as the hashing algorithm
-        length=32,                  # The length of the derived key (32 bytes for AES-256)
-        salt=salt,                  # The salt to use for the KDF
-        iterations=100000,          # The number of iterations to perform
-        backend=default_backend()   # The cryptographic backend to use
+        algorithm=hashes.SHA256(),
+
+        # number size equates to increased security at the expense of time efficiency
+        # length is in bytes 32 for SHA-256; iterations is how many times the thing is hashed
+        
+        # 8 * 32 = 256
+        length=32,
+        # adds random variable that helps protect against pre-computed tables
+        salt=salt,
+        
+        iterations=10000,
+
+        # based on https://cryptography.io/en/latest/fernet/#implementation
     )
-    return kdf.derive(password.encode())  # Derive the key and return it
+    return kdf.derive(password.encode())
 
-def encrypt(plaintext: str, password: str) -> (bytes, bytes):
-    """
-    Encrypts a plaintext message using AES with a key derived from a password.
+def encrypt(plaintext: str, password: str) -> bytes:
+ 
+    """encrypt users plaintext using AES + a key derived from password."""
+    salt = os.urandom(16)
+    key = derive_key(password, salt)
 
-    Args:
-        plaintext (str): The message to encrypt.
-        password (str): The password to derive the encryption key from.
+    """random init vector for aes encryption - this is needed for the mode"""
+    init_vector = os.urandom(16)
 
-    Returns:
-        (bytes, bytes): The base64-encoded ciphertext and the encryption key.
-    """
-    salt = os.urandom(16)  # Generate a random 16-byte salt
-    key = derive_key(password, salt)  # Derive the key from the password and salt
-    iv = os.urandom(16)  # Generate a random 16-byte initialization vector (IV)
-    cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())  # Create the AES cipher in CFB mode
-    encryptor = cipher.encryptor()  # Create an encryptor object
-    ciphertext = encryptor.update(plaintext.encode()) + encryptor.finalize()  # Encrypt the plaintext
-    return base64.b64encode(salt + iv + ciphertext), key  # Return the encoded ciphertext and the key
+    # CTR is Counter, i.e., Uses a counter as the IV to generate unique keystream blocks for encryption
+    cipher = Cipher(algorithms.AES(key), modes.CTR(init_vector))
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(plaintext.encode()) + encryptor.finalize()
+    
+    """add random value (salt) + init vector + ciphertext"""
+    return base64.b64encode(salt + init_vector + ciphertext)
 
 def decrypt(ciphertext: bytes, password: str) -> str:
-    """
-    Decrypts a ciphertext message using AES with a key derived from a password.
+   
+    """Decrypts ciphertext using AES with a key derived from the password."""
+    data = base64.b64decode(ciphertext)
+    
+    # slice/dice and assign
+    salt, init_vector, ciphertext = data[:16], data[16:32], data[32:]
 
-    Args:
-        ciphertext (bytes): The base64-encoded ciphertext to decrypt.
-        password (str): The password to derive the decryption key from.
-
-    Returns:
-        str: The decrypted plaintext message.
-    """
-    data = base64.b64decode(ciphertext)  # Decode the base64-encoded ciphertext
-    salt, iv, ciphertext = data[:16], data[16:32], data[32:]  # Extract the salt, IV, and ciphertext
-    key = derive_key(password, salt)  # Derive the key from the password and salt
-    cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())  # Create the AES cipher in CFB mode
-    decryptor = cipher.decryptor()  # Create a decryptor object
-    plaintext = decryptor.update(ciphertext) + decryptor.finalize()  # Decrypt the ciphertext
-    return plaintext.decode()  # Return the decrypted plaintext
+    key = derive_key(password, salt)
+    cipher = Cipher(algorithms.AES(key), modes.CTR(init_vector))
+    decryptor = cipher.decryptor()
+    return (decryptor.update(ciphertext) + decryptor.finalize()).decode()
 
 def main():
-    """
-    The main function that handles user input and performs encryption or decryption.
-    """
-    choice = input("Would you like to (e)ncrypt or (d)ecrypt?: ").lower()  # Ask the user whether to encrypt or decrypt
-    if choice == 'e':  # If the user chooses to encrypt
-        plaintext = input("Enter the plaintext: ")  # Get the plaintext from the user
-        password = getpass.getpass("Enter the password: ")  # Get the password from the user (hidden input)
-        ciphertext, key = encrypt(plaintext, password)  # Encrypt the plaintext
-        with open('secret.enc', 'wb') as f:  # Open a file to write the ciphertext
-            f.write(ciphertext)  # Write the ciphertext to the file
-        print("Secret encrypted and stored in 'secret.enc'.")  # Inform the user that the encryption was successful
-    elif choice == 'd':  # If the user chooses to decrypt
-        with open('secret.enc', 'rb') as f:  # Open the file containing the ciphertext
-            ciphertext = f.read()  # Read the ciphertext from the file
-        password = getpass.getpass("Enter the password: ")  # Get the password from the user (hidden input)
+    """this is the main function to handle encryption and decryption."""
+    choice = input("Press 'e' to encrypt plaintext or 'd' to decrypt using a password:").lower()
+    if choice == 'e':
+        plaintext = input("Enter the plaintext: ")
+        password = getpass.getpass("Enter the password: ")
+        ciphertext = encrypt(plaintext, password)
+        with open('hash.me', 'wb') as f:
+            f.write(ciphertext)
+        print("Secret encrypted and stored in 'hash.me'. Run it again and enter password to decrypt!")
+    elif choice == 'd':
+        with open('hash.me', 'rb') as f:
+            ciphertext = f.read()
+        password = getpass.getpass("Enter your password to decrypt the hash: ")
         try:
-            plaintext = decrypt(ciphertext, password)  # Decrypt the ciphertext
-            print("Decrypted text:", plaintext)  # Print the decrypted plaintext
-        except Exception as e:  # If an error occurs during decryption
-            print("Decryption failed:", str(e))  # Inform the user that decryption failed
+            plaintext = decrypt(ciphertext, password)
+            print("Decrypted message:", plaintext)
+        except Exception as e:
+            print("Oh boy! Embrace the failure. Ain't no password like that, mate.", str(e))
     else:
-        print("Invalid choice. Please select either 'e' or 'd'.")  # Inform the user of an invalid choice
+        print("Enter 'e' or 'd', my good human.")
 
+
+# this lets us run a python script directly "python main.py" and also if we wanted to use this program as a module in another script
 if __name__ == "__main__":
-    main()  # Run the main function if this script is executed directly
+    main()
